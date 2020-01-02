@@ -9,9 +9,55 @@ import torchvision.transforms as transforms
 import lmdb
 import six
 import sys
+import os
+import glob
 from PIL import Image
 import numpy as np
 
+
+class CCPD(Dataset):
+    def __init__(self, root, transform=None, target_transform=None):
+        assert os.path.isdir(root)
+        self.root = root
+        self.data = glob.glob(os.path.join(self.root, '*'))
+
+        self.transform = transform
+        self.target_transform = target_transform
+
+    provinces = ["皖", "沪", "津", "渝", "冀", "晋", "蒙", "辽", "吉", "黑", "苏", "浙", "京", "闽", "赣", "鲁", "豫", "鄂", "湘", "粤", "桂", "琼", "川", "贵", "云", "藏", "陕", "甘", "青", "宁", "新", "警", "学", "O"]
+    alphabets = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W',
+             'X', 'Y', 'Z', 'O']
+    ads = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
+       'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'O']
+
+    # 假设文件夹内全部都是图片数据
+    def __len__(self):
+        return len(self.data)
+
+    @classmethod
+    def interpret_plate_name(cls, fn):
+        chars = fn.rsplit('/', 1)[-1].split('-')[-3].split('_')
+        plate = []
+        for i, char in enumerate(chars):
+            char_idx = int(char)
+            if i == 0:
+                plate.append(CCPD.provinces[char_idx])
+            elif i == 1:
+                plate.append(CCPD.alphabets[char_idx])
+            else:
+                plate.append(CCPD.ads[char_idx])
+        return ''.join(plate)
+
+    def __getitem__(self, index):
+        assert index < len(self)
+        img = Image.open(self.data[index]).convert('L')
+        label = CCPD.interpret_plate_name(self.data[index])
+
+        if self.transform is not None:
+            img = self.transform(img)
+            
+        return (img, label)
+        
 
 class lmdbDataset(Dataset):
 
@@ -141,3 +187,8 @@ class alignCollate(object):
         images = torch.cat([t.unsqueeze(0) for t in images], 0)
 
         return images, labels
+
+
+if __name__ == '__main__':
+    dataset = CCPD('./data')
+    print(CCPD.interpret_plate_name('normal_plates/1121120-33_50-210&367_509&680-465&511_210&680_254&536_509&367-0_0_2_13_31_26_25-74-254.jpg'))

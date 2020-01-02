@@ -16,6 +16,7 @@ from torch.nn import CTCLoss
 import os
 import utils
 import dataset
+import glob
 
 import models.crnn as crnn
 
@@ -45,6 +46,7 @@ parser.add_argument('--adadelta', action='store_true', help='Whether to use adad
 parser.add_argument('--keep_ratio', action='store_true', help='whether to keep ratio for image resize')
 parser.add_argument('--manualSeed', type=int, default=1234, help='reproduce experiemnt')
 parser.add_argument('--random_sample', action='store_true', help='whether to sample the dataset with random sampler')
+parser.add_argument('--test', action='store_true', help='test mode and skip training')
 opt = parser.parse_args()
 print(opt)
 
@@ -60,7 +62,10 @@ cudnn.benchmark = True
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
 
-train_dataset = dataset.lmdbDataset(root=opt.trainRoot)
+if len(glob.glob(os.path.join(opt.trainRoot, '*.mdb'))):
+    train_dataset = dataset.lmdbDataset(root=opt.trainRoot)
+else:
+    train_dataset = dataset.CCPD(opt.trainRoot)
 assert train_dataset
 if not opt.random_sample:
     sampler = dataset.randomSequentialSampler(train_dataset, opt.batchSize)
@@ -71,8 +76,11 @@ train_loader = torch.utils.data.DataLoader(
     sampler=sampler,
     num_workers=int(opt.workers),
     collate_fn=dataset.alignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio=opt.keep_ratio))
-test_dataset = dataset.lmdbDataset(
-    root=opt.valRoot, transform=dataset.resizeNormalize((100, 32)))
+if len(glob.glob(os.path.join(opt.valRoot, '*.mdb'))):
+    test_dataset = dataset.lmdbDataset(
+        root=opt.valRoot, transform=dataset.resizeNormalize((100, 32)))
+else:
+    test_dataset = dataset.CCPD(opt.valRoot, transform=dataset.resizeNormalize((100, 32)))
 
 alphabet = utils.generate_alphabet()
 print('Alphabet:', alphabet, '\n', len(alphabet))
@@ -194,6 +202,9 @@ def trainBatch(net, criterion, optimizer):
     optimizer.step()
     return cost
 
+if opt.test:
+    val(crnn, test_dataset, criterion)
+    sys.exit(0)
 
 for epoch in range(opt.nepoch):
     train_iter = iter(train_loader)
