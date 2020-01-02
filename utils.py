@@ -7,6 +7,11 @@ from torch.autograd import Variable
 import collections
 
 
+def generate_alphabet():
+    import tool.create_dataset as dataset
+    alphabet = list(set(dataset.provinces + dataset.alphabets + dataset.ads))
+    return ''.join(alphabet)
+
 class strLabelConverter(object):
     """Convert between str and label.
 
@@ -43,7 +48,7 @@ class strLabelConverter(object):
             text = [
                 self.dict[char.lower() if self._ignore_case else char]
                 for char in text
-            ]
+            ] # encode就是将字符转换为对应的字符下标
             length = [len(text)]
         elif isinstance(text, collections.Iterable):
             length = [len(s) for s in text]
@@ -131,7 +136,8 @@ def oneHot(v, v_length, nc):
 
 
 def loadData(v, data):
-    v.data.resize_(data.size()).copy_(data)
+    with torch.no_grad():
+        v.resize_(data.size()).copy_(data)
 
 
 def prettyPrint(v):

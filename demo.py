@@ -8,7 +8,7 @@ import models.crnn as crnn
 
 
 model_path = './data/crnn.pth'
-img_path = './data/demo.png'
+img_path = './data/demo2.jpg'
 alphabet = '0123456789abcdefghijklmnopqrstuvwxyz'
 
 model = crnn.CRNN(32, 1, 37, 256)
@@ -21,6 +21,7 @@ converter = utils.strLabelConverter(alphabet)
 
 transformer = dataset.resizeNormalize((100, 32))
 image = Image.open(img_path).convert('L')
+print(image.size)
 image = transformer(image)
 if torch.cuda.is_available():
     image = image.cuda()
