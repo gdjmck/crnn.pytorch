@@ -50,6 +50,7 @@ class lmdbDataset(Dataset):
             buf.seek(0)
             try:
                 img = Image.open(buf).convert('L')
+                raw_img = img
             except IOError:
                 print('Corrupted image for %d' % index)
                 return self[index + 1]
@@ -59,6 +60,12 @@ class lmdbDataset(Dataset):
 
             label_key = 'label-%09d' % index
             label = txn.get(label_key.encode()).decode()
+            
+            '''
+            if index % 10 == 0 and index < 100:
+                raw_img.save('./%s.jpg'%label)
+                print('SAVE a sample dataset image')
+            '''
 
             if self.target_transform is not None:
                 label = self.target_transform(label)
