@@ -7,6 +7,14 @@ from torch.autograd import Variable
 import collections
 
 
+def generate_alphabet():
+    '''
+    import tool.create_dataset as dataset
+    alphabet = list(set(dataset.provinces + dataset.alphabets + dataset.ads))
+    return ''.join(alphabet)
+    '''
+    return '黑甘J陕新L0FE浙鲁CH3Q云A津D2藏豫学X沪粤京G闽Y5川桂BU6辽M8宁N湘1贵P7蒙O晋皖青V警Z鄂RS赣苏4冀渝琼9吉KTW'
+
 class strLabelConverter(object):
     """Convert between str and label.
 
@@ -131,7 +139,8 @@ def oneHot(v, v_length, nc):
 
 
 def loadData(v, data):
-    v.data.resize_(data.size()).copy_(data)
+    with torch.no_grad():
+        v.resize_(data.size()).copy_(data)
 
 
 def prettyPrint(v):

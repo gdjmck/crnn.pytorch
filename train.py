@@ -7,9 +7,12 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.utils.data
+import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
-from warpctc_pytorch import CTCLoss
+import sys
+sys.path.append('/home/chengk/anaconda3/envs/py36/lib/python3.6/site-packages/warpctc_pytorch-0.1-py3.6-linux-x86_64.egg/warpctc_pytorch')
+from torch.nn import CTCLoss
 import os
 import utils
 import dataset
@@ -57,7 +60,7 @@ cudnn.benchmark = True
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
 
-train_dataset = dataset.lmdbDataset(root=opt.trainroot)
+train_dataset = dataset.lmdbDataset(root=opt.trainRoot)
 assert train_dataset
 if not opt.random_sample:
     sampler = dataset.randomSequentialSampler(train_dataset, opt.batchSize)
@@ -65,17 +68,19 @@ else:
     sampler = None
 train_loader = torch.utils.data.DataLoader(
     train_dataset, batch_size=opt.batchSize,
-    shuffle=True, sampler=sampler,
+    sampler=sampler,
     num_workers=int(opt.workers),
     collate_fn=dataset.alignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio=opt.keep_ratio))
 test_dataset = dataset.lmdbDataset(
-    root=opt.valroot, transform=dataset.resizeNormalize((100, 32)))
+    root=opt.valRoot, transform=dataset.resizeNormalize((100, 32)))
 
-nclass = len(opt.alphabet) + 1
+alphabet = utils.generate_alphabet()
+print('Alphabet:', alphabet, '\n', len(alphabet))
+nclass = len(alphabet) + 1
 nc = 1
 
-converter = utils.strLabelConverter(opt.alphabet)
-criterion = CTCLoss()
+converter = utils.strLabelConverter(alphabet, ignore_case=False)
+criterion = CTCLoss(reduction='sum')
 
 
 # custom weights initialization called on crnn
@@ -88,22 +93,22 @@ def weights_init(m):
         m.bias.data.fill_(0)
 
 
-crnn = crnn.CRNN(opt.imgH, nc, nclass, opt.nh)
-crnn.apply(weights_init)
-if opt.pretrained != '':
-    print('loading pretrained model from %s' % opt.pretrained)
-    crnn.load_state_dict(torch.load(opt.pretrained))
-print(crnn)
-
 image = torch.FloatTensor(opt.batchSize, 3, opt.imgH, opt.imgH)
 text = torch.IntTensor(opt.batchSize * 5)
 length = torch.IntTensor(opt.batchSize)
 
+crnn = crnn.CRNN(opt.imgH, nc, nclass, opt.nh)
+crnn.apply(weights_init)
 if opt.cuda:
     crnn.cuda()
     crnn = torch.nn.DataParallel(crnn, device_ids=range(opt.ngpu))
     image = image.cuda()
     criterion = criterion.cuda()
+if opt.pretrained != '':
+    print('loading pretrained model from %s' % opt.pretrained)
+    crnn.load_state_dict(torch.load(opt.pretrained))
+print(crnn)
+
 
 image = Variable(image)
 text = Variable(text)
@@ -150,11 +155,11 @@ def val(net, dataset, criterion, max_iter=100):
 
         preds = crnn(image)
         preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
-        cost = criterion(preds, text, preds_size, length) / batch_size
+        cost = criterion(F.log_softmax(preds, dim=-1), text, preds_size, length) / batch_size
         loss_avg.add(cost)
 
         _, preds = preds.max(2)
-        preds = preds.squeeze(2)
+        #preds = preds.squeeze(2)
         preds = preds.transpose(1, 0).contiguous().view(-1)
         sim_preds = converter.decode(preds.data, preds_size.data, raw=False)
         for pred, target in zip(sim_preds, cpu_texts):
@@ -173,14 +178,17 @@ def trainBatch(net, criterion, optimizer):
     data = train_iter.next()
     cpu_images, cpu_texts = data
     batch_size = cpu_images.size(0)
+    assert batch_size > 0
     utils.loadData(image, cpu_images)
     t, l = converter.encode(cpu_texts)
+    #print(cpu_texts, 'converts to', t, t.size())
     utils.loadData(text, t)
     utils.loadData(length, l)
 
-    preds = crnn(image)
+    preds = F.log_softmax(crnn(image), dim=-1)
+    #print('preds:', preds.size())
     preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
-    cost = criterion(preds, text, preds_size, length) / batch_size
+    cost = criterion(preds, text, preds_size, length).sum() / batch_size
     crnn.zero_grad()
     cost.backward()
     optimizer.step()
