@@ -59,6 +59,8 @@ torch.manual_seed(opt.manualSeed)
 
 cudnn.benchmark = True
 
+val_wrong = None
+
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
 
@@ -175,8 +177,10 @@ def val(net, dataset, criterion, max_iter=100):
         preds = preds.transpose(1, 0).contiguous().view(-1)
         sim_preds = converter.decode(preds.data, preds_size.data, raw=False)
         for pred, target in zip(sim_preds, cpu_texts):
-            if pred == target.lower():
+            if pred == target:
                 n_correct += 1
+            elif val_wrong is not None:
+                val_wrong.append(target)
 
     raw_preds = converter.decode(preds.data, preds_size.data, raw=True)[:opt.n_test_disp]
     for raw_pred, pred, gt in zip(raw_preds, sim_preds, cpu_texts):
@@ -207,7 +211,12 @@ def trainBatch(net, criterion, optimizer):
     return cost
 
 if opt.test:
+    global val_wrong
+    val_wrong = []
     val(crnn, test_dataset, criterion)
+    with open('./val_wrong.txt', 'w') as f:
+        for item in val_wrong:
+            f.write(item+'\n')
     sys.exit(0)
 
 for epoch in range(opt.nepoch):
