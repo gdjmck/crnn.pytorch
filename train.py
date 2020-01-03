@@ -64,8 +64,10 @@ if torch.cuda.is_available() and not opt.cuda:
 
 if len(glob.glob(os.path.join(opt.trainRoot, '*.mdb'))):
     train_dataset = dataset.lmdbDataset(root=opt.trainRoot)
+    print('Training with lmdb dataset')
 else:
     train_dataset = dataset.CCPD(opt.trainRoot)
+    print('Training with custom dataset')
 assert train_dataset
 if not opt.random_sample:
     sampler = dataset.randomSequentialSampler(train_dataset, opt.batchSize)
@@ -79,8 +81,10 @@ train_loader = torch.utils.data.DataLoader(
 if len(glob.glob(os.path.join(opt.valRoot, '*.mdb'))):
     test_dataset = dataset.lmdbDataset(
         root=opt.valRoot, transform=dataset.resizeNormalize((100, 32)))
+    print('Testing with lmdb dataset')
 else:
     test_dataset = dataset.CCPD(opt.valRoot, transform=dataset.resizeNormalize((100, 32)))
+    print('Testing with custom dataset')
 
 alphabet = utils.generate_alphabet()
 print('Alphabet:', alphabet, '\n', len(alphabet))
