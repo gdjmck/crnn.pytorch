@@ -211,7 +211,6 @@ def trainBatch(net, criterion, optimizer):
     return cost
 
 if opt.test:
-    global val_wrong
     val_wrong = []
     val(crnn, test_dataset, criterion)
     with open('./val_wrong.txt', 'w') as f:
