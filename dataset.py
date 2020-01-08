@@ -13,7 +13,10 @@ import os
 import glob
 from PIL import Image
 import numpy as np
+import pickle
 
+with open('./lmdb/ignore_list.pkl', 'rb') as f:
+    ignore_list = pickle.load(f)
 
 class CCPD(Dataset):
     def __init__(self, root, transform=None, target_transform=None):
@@ -116,6 +119,10 @@ class lmdbDataset(Dataset):
             if self.target_transform is not None:
                 label = self.target_transform(label)
 
+            # filter item if label is in ignore_list
+            if label in ignore_list:
+                return None
+
         return (img, label)
 
 
@@ -168,6 +175,8 @@ class alignCollate(object):
         self.min_ratio = min_ratio
 
     def __call__(self, batch):
+        # handle None items in a batch
+        batch = [item for item in batch if item is not None]
         images, labels = zip(*batch)
 
         imgH = self.imgH

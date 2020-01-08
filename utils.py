@@ -5,6 +5,11 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import collections
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as font_manager
+font_path = '/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc'
+prop = font_manager.FontProperties(fname=font_path)
 
 
 def generate_alphabet():
@@ -14,6 +19,7 @@ def generate_alphabet():
     return ''.join(alphabet)
     '''
     return '黑甘J陕新L0FE浙鲁CH3Q云A津D2藏豫学X沪粤京G闽Y5川桂BU6辽M8宁N湘1贵P7蒙O晋皖青V警Z鄂RS赣苏4冀渝琼9吉KTW'
+
 
 class strLabelConverter(object):
     """Convert between str and label.
@@ -156,3 +162,27 @@ def assureRatio(img):
         main = nn.UpsamplingBilinear2d(size=(h, h), scale_factor=None)
         img = main(img)
     return img
+
+
+# helper function to show an image
+# (used in the `plot_classes_preds` function below)
+def matplotlib_imshow(img, one_channel=False):
+    if one_channel:
+        img = img.mean(dim=0)
+    img = img / 2 + 0.5     # unnormalize
+    npimg = img.numpy()
+    if one_channel:
+        plt.imshow(npimg, cmap="Greys")
+    else:
+        plt.imshow(np.transpose(npimg, (1, 2, 0)))
+
+
+def plot_preds(images, preds, labels):
+    fig = plt.figure(figsize=(12, 48))
+    for idx in range(4):
+        ax = fig.add_subplot(4, 1, idx+1, xticks=[], yticks=[])
+        matplotlib_imshow(images[idx], one_channel=True)
+        ax.set_title('%s predicted as %s'%(labels[idx], preds[idx]), 
+                     color=('green' if preds[idx] == labels[idx] else 'red'),
+                     fontproperties=prop, fontsize=32)
+    return fig

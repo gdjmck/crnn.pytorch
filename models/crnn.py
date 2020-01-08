@@ -53,27 +53,55 @@ class CRNN(nn.Module):
         convRelu(2, True)
         convRelu(3)
         cnn.add_module('pooling{0}'.format(2),
-                       nn.MaxPool2d((2, 2), (2, 1), (0, 1)))  # 256x4x16
+                       nn.MaxPool2d((2, 2), (2, 1), (0, 1)))  # 256x4x33 stride=(2, 1) for h & w
         convRelu(4, True)
         convRelu(5)
         cnn.add_module('pooling{0}'.format(3),
-                       nn.MaxPool2d((2, 2), (2, 1), (0, 1)))  # 512x2x16
-        convRelu(6, True)  # 512x1x16
+                       nn.MaxPool2d((2, 2), (2, 1), (0, 1)))  # 512x2x34
+        convRelu(6, True)  # 512x1x33
 
         self.cnn = cnn
+        self.vision3 = nn.Sequential()
+        self.vision3.add_module('conv_vision3', nn.Conv2d(nm[-1], nm[-1], (1, 3), 1, (0, 1)))
+        self.vision3.add_module('batchnorm_vision3', nn.BatchNorm2d(512))
+        self.vision3.add_module('relu_vision3', nn.ReLU(True))
+        self.vision5 = nn.Sequential()
+        self.vision5.add_module('conv_vision5', nn.Conv2d(nm[-1], nm[-1], (1, 5), 1, (0, 2)))
+        self.vision5.add_module('batchnorm_vision5', nn.BatchNorm2d(512))
+        self.vision5.add_module('relu_vision5', nn.ReLU(True))
+
+        self.predictor = nn.Sequential()
+        self.predictor.add_module('conv_pred', nn.Conv2d(nm[-1], nclass, 1, 1))
+        self.predictor.add_module('batchnorm_pred', nn.BatchNorm2d(nclass))
+        self.predictor.add_module('relu_pred', nn.ReLU(True))
+        '''
         self.rnn = nn.Sequential(
             BidirectionalLSTM(512, nh, nh),
             BidirectionalLSTM(nh, nh, nclass))
+        '''
 
     def forward(self, input):
         # conv features
+        #print('input.shape:', input.size())
         conv = self.cnn(input)
         b, c, h, w = conv.size()
         assert h == 1, "the height of conv must be 1"
+        #print('conv.shape:', conv.shape)
+        '''
         conv = conv.squeeze(2)
         conv = conv.permute(2, 0, 1)  # [w, b, c]
 
         # rnn features
         output = self.rnn(conv)
+        print('rnn.shape:', output.size())
+        '''
+        vision1 = conv
+        vision3 = self.vision3(conv)
+        vision5 = self.vision5(conv)
+        feat = vision1 + vision3 + vision5
+
+        output = self.predictor(feat)
+        output = output.squeeze(2)
+        output = output.permute(2, 0, 1)
 
         return output

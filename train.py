@@ -9,6 +9,8 @@ import torch.optim as optim
 import torch.utils.data
 import torch.nn.functional as F
 from torch.autograd import Variable
+from torch.utils.tensorboard import SummaryWriter
+from utils import plot_preds
 import numpy as np
 import sys
 sys.path.append('/home/chengk/anaconda3/envs/py36/lib/python3.6/site-packages/warpctc_pytorch-0.1-py3.6-linux-x86_64.egg/warpctc_pytorch')
@@ -47,6 +49,7 @@ parser.add_argument('--keep_ratio', action='store_true', help='whether to keep r
 parser.add_argument('--manualSeed', type=int, default=1234, help='reproduce experiemnt')
 parser.add_argument('--random_sample', action='store_true', help='whether to sample the dataset with random sampler')
 parser.add_argument('--test', action='store_true', help='test mode and skip training')
+parser.add_argument('--summary', type=str, default='./runs/lmdb', help='folder to save tensorboard file')
 opt = parser.parse_args()
 print(opt)
 
@@ -60,6 +63,8 @@ torch.manual_seed(opt.manualSeed)
 cudnn.benchmark = True
 
 val_wrong = None
+
+writer = SummaryWriter(opt.summary)
 
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
@@ -120,7 +125,11 @@ if opt.cuda:
     criterion = criterion.cuda()
 if opt.pretrained != '':
     print('loading pretrained model from %s' % opt.pretrained)
-    crnn.load_state_dict(torch.load(opt.pretrained))
+    try:
+        crnn.load_state_dict(torch.load(opt.pretrained))
+    except:
+        print('Strict load failed, use unstricted loading.')
+        crnn.load_state_dict(torch.load(opt.pretrained), strict=False)
 print(crnn)
 
 
@@ -158,7 +167,10 @@ def val(net, dataset, criterion, max_iter=100):
 
     max_iter = min(max_iter, len(data_loader))
     for i in range(max_iter):
-        data = val_iter.next()
+        try:
+            data = val_iter.next()
+        except:
+            continue
         i += 1
         cpu_images, cpu_texts = data
         batch_size = cpu_images.size(0)
@@ -180,7 +192,10 @@ def val(net, dataset, criterion, max_iter=100):
             if pred == target:
                 n_correct += 1
             elif val_wrong is not None:
-                val_wrong.append(target)
+                val_wrong.append(target+'_'+pred)
+        writer.add_scalars('Test', {'loss': cost.item(), 'acc': (np.array(sim_preds) == np.array(cpu_texts)).mean()}, 
+                            global_step=global_step*max_iter+i)
+
 
     raw_preds = converter.decode(preds.data, preds_size.data, raw=True)[:opt.n_test_disp]
     for raw_pred, pred, gt in zip(raw_preds, sim_preds, cpu_texts):
@@ -202,9 +217,20 @@ def trainBatch(net, criterion, optimizer):
     utils.loadData(length, l)
 
     preds = F.log_softmax(crnn(image), dim=-1)
+    preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
+    _, preds_str = preds.max(2)
+    preds_str = preds_str.transpose(1, 0).contiguous().view(-1)
+    preds_str = converter.decode(preds_str.data, preds_size.data, raw=False)
+    acc = (np.array(preds_str) == np.array(cpu_texts)).mean()
+
+    if display_flag:
+        writer.add_figure('Train predictions vs. actuals',
+                            plot_preds(cpu_images, preds_str, cpu_texts),
+                            global_step=global_step)
     #print('preds:', preds.size())
     preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
     cost = criterion(preds, text, preds_size, length).sum() / batch_size
+    writer.add_scalars('training', {'loss': cost.item(), 'acc': acc}, global_step)
     crnn.zero_grad()
     cost.backward()
     optimizer.step()
@@ -218,13 +244,20 @@ if opt.test:
             f.write(item+'\n')
     sys.exit(0)
 
+global_step = 0
 for epoch in range(opt.nepoch):
     train_iter = iter(train_loader)
     i = 0
     while i < len(train_loader):
+        global_step += 1
         for p in crnn.parameters():
             p.requires_grad = True
         crnn.train()
+
+        if i % opt.valInterval == 0:
+            display_flag = True
+        else:
+            display_flag = False
 
         cost = trainBatch(crnn, criterion, optimizer)
         loss_avg.add(cost)
