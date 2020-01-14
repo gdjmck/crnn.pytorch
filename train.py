@@ -35,6 +35,7 @@ parser.add_argument('--nepoch', type=int, default=25, help='number of epochs to 
 parser.add_argument('--cuda', action='store_true', help='enables cuda')
 parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
 parser.add_argument('--pretrained', default='', help="path to pretrained model (to continue training)")
+parser.add_argument('--strict', action='store_true', help='load pretrained model in strict mode')
 parser.add_argument('--alphabet', type=str, default='0123456789abcdefghijklmnopqrstuvwxyz')
 parser.add_argument('--expr_dir', default='expr', help='Where to store samples and models')
 parser.add_argument('--displayInterval', type=int, default=500, help='Interval to be displayed')
@@ -49,6 +50,8 @@ parser.add_argument('--keep_ratio', action='store_true', help='whether to keep r
 parser.add_argument('--manualSeed', type=int, default=1234, help='reproduce experiemnt')
 parser.add_argument('--random_sample', action='store_true', help='whether to sample the dataset with random sampler')
 parser.add_argument('--test', action='store_true', help='test mode and skip training')
+parser.add_argument('--no_need_interpret', action='store_true', help='switch to turn off filename interpretation')
+parser.add_argument('--focal', action='store_true', help='switch to turn on focal loss')
 parser.add_argument('--summary', type=str, default='./runs/lmdb', help='folder to save tensorboard file')
 opt = parser.parse_args()
 print(opt)
@@ -61,6 +64,7 @@ np.random.seed(opt.manualSeed)
 torch.manual_seed(opt.manualSeed)
 
 cudnn.benchmark = True
+focal_alpha = False
 
 val_wrong = None
 
@@ -73,8 +77,9 @@ if len(glob.glob(os.path.join(opt.trainRoot, '*.mdb'))):
     train_dataset = dataset.lmdbDataset(root=opt.trainRoot)
     print('Training with lmdb dataset')
 else:
-    train_dataset = dataset.CCPD(opt.trainRoot)
+    train_dataset = dataset.CCPD(opt.trainRoot, requires_interpret=not opt.no_need_interpret)
     print('Training with custom dataset')
+    focal_alpha = True
 assert train_dataset
 if not opt.random_sample:
     sampler = dataset.randomSequentialSampler(train_dataset, opt.batchSize)
@@ -84,7 +89,7 @@ train_loader = torch.utils.data.DataLoader(
     train_dataset, batch_size=opt.batchSize,
     sampler=sampler,
     num_workers=int(opt.workers),
-    collate_fn=dataset.alignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio=opt.keep_ratio))
+    collate_fn=dataset.alignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio=opt.keep_ratio, requires_prob=focal_alpha))
 if len(glob.glob(os.path.join(opt.valRoot, '*.mdb'))):
     test_dataset = dataset.lmdbDataset(
         root=opt.valRoot, transform=dataset.resizeNormalize((100, 32)))
@@ -99,7 +104,7 @@ nclass = len(alphabet) + 1
 nc = 1
 
 converter = utils.strLabelConverter(alphabet, ignore_case=False)
-criterion = CTCLoss(reduction='sum')
+criterion = CTCLoss(reduction='none')
 
 
 # custom weights initialization called on crnn
@@ -115,6 +120,7 @@ def weights_init(m):
 image = torch.FloatTensor(opt.batchSize, 3, opt.imgH, opt.imgH)
 text = torch.IntTensor(opt.batchSize * 5)
 length = torch.IntTensor(opt.batchSize)
+probs = torch.FloatTensor(opt.batchSize)
 
 crnn = crnn.CRNN(opt.imgH, nc, nclass, opt.nh)
 crnn.apply(weights_init)
@@ -122,20 +128,26 @@ if opt.cuda:
     crnn.cuda()
     crnn = torch.nn.DataParallel(crnn, device_ids=range(opt.ngpu))
     image = image.cuda()
+    probs = probs.cuda()
     criterion = criterion.cuda()
 if opt.pretrained != '':
     print('loading pretrained model from %s' % opt.pretrained)
     try:
         crnn.load_state_dict(torch.load(opt.pretrained))
     except:
-        print('Strict load failed, use unstricted loading.')
-        crnn.load_state_dict(torch.load(opt.pretrained), strict=False)
+        if not opt.strict:
+            print('Strict load failed, use unstricted loading.')
+            crnn.load_state_dict(torch.load(opt.pretrained), strict=False)
+        else:
+            print('Failed to load model')
+            sys.exit(0)
 print(crnn)
 
 
 image = Variable(image)
 text = Variable(text)
 length = Variable(length)
+probs = Variable(probs)
 
 # loss averager
 loss_avg = utils.averager()
@@ -172,7 +184,10 @@ def val(net, dataset, criterion, max_iter=100):
         except:
             continue
         i += 1
-        cpu_images, cpu_texts = data
+        try:
+            cpu_images, cpu_texts = data
+        except ValueError:
+            cpu_images, cpu_texts, _ = data
         batch_size = cpu_images.size(0)
         utils.loadData(image, cpu_images)
         t, l = converter.encode(cpu_texts)
@@ -181,7 +196,7 @@ def val(net, dataset, criterion, max_iter=100):
 
         preds = crnn(image)
         preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
-        cost = criterion(F.log_softmax(preds, dim=-1), text, preds_size, length) / batch_size
+        cost = criterion(F.log_softmax(preds, dim=-1), text, preds_size, length).sum() / batch_size
         loss_avg.add(cost)
 
         _, preds = preds.max(2)
@@ -207,7 +222,13 @@ def val(net, dataset, criterion, max_iter=100):
 
 def trainBatch(net, criterion, optimizer):
     data = train_iter.next()
-    cpu_images, cpu_texts = data
+    if focal_alpha:
+        cpu_images, cpu_texts, alpha = data
+        alpha = torch.FloatTensor(list(alpha))
+        utils.loadData(probs, alpha)
+        assert not probs.requires_grad
+    else:
+        cpu_images, cpu_texts = data
     batch_size = cpu_images.size(0)
     assert batch_size > 0
     utils.loadData(image, cpu_images)
@@ -229,7 +250,10 @@ def trainBatch(net, criterion, optimizer):
                             global_step=global_step)
     #print('preds:', preds.size())
     preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
-    cost = criterion(preds, text, preds_size, length).sum() / batch_size
+    cost = criterion(preds, text, preds_size, length)
+    if opt.focal:
+        cost = cost * probs
+    cost = cost.sum() / batch_size
     writer.add_scalars('training', {'loss': cost.item(), 'acc': acc}, global_step)
     crnn.zero_grad()
     cost.backward()

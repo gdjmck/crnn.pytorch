@@ -18,9 +18,36 @@ import pickle
 with open('./lmdb/ignore_list.pkl', 'rb') as f:
     ignore_list = pickle.load(f)
 
+def character_prob():
+    with open('./stat.txt', 'r') as f:
+        stat = f.readlines()
+    probs = {}
+    for line in stat:
+        char, cnt, prob = line.split(' ')
+        probs[char] = float(prob[:-1])
+    return probs
+stat = character_prob()
+
+
+def license_prob(license):
+    '''
+        calculate the prob of the whole char sequence
+        $license: str
+    '''
+    prob = stat[license[0]]
+    for i in range(1, len(license)):
+        if license[i] == license[i-1]:
+            prob += stat[license[i]]
+        else:
+            prob += stat[license[i]]
+    return prob
+
+
 class CCPD(Dataset):
-    def __init__(self, root, transform=None, target_transform=None):
+    def __init__(self, root, transform=None, target_transform=None, requires_prob=True, requires_interpret=True):
         assert os.path.isdir(root)
+        self.requires_prob = requires_prob
+        self.requires_interpret = requires_interpret
         self.root = root
         self.data = glob.glob(os.path.join(self.root, '*'))
 
@@ -54,12 +81,20 @@ class CCPD(Dataset):
     def __getitem__(self, index):
         assert index < len(self)
         img = Image.open(self.data[index]).convert('L')
-        label = CCPD.interpret_plate_name(self.data[index])
+        if self.requires_interpret:
+            label = CCPD.interpret_plate_name(self.data[index])
+        else:
+            label = self.data[index].rsplit('/', 1)[-1].split('.')[0]
+        if self.requires_prob:
+            prob = license_prob(label)
+        else:
+            prob = 1.0
+        alpha = 1/prob
 
         if self.transform is not None:
             img = self.transform(img)
             
-        return (img, label)
+        return (img, label, alpha)
         
 
 class lmdbDataset(Dataset):
@@ -168,16 +203,20 @@ class randomSequentialSampler(sampler.Sampler):
 
 class alignCollate(object):
 
-    def __init__(self, imgH=32, imgW=100, keep_ratio=False, min_ratio=1):
+    def __init__(self, imgH=32, imgW=100, keep_ratio=False, min_ratio=1, requires_prob=False):
         self.imgH = imgH
         self.imgW = imgW
         self.keep_ratio = keep_ratio
         self.min_ratio = min_ratio
+        self.requires_prob = requires_prob
 
     def __call__(self, batch):
         # handle None items in a batch
         batch = [item for item in batch if item is not None]
-        images, labels = zip(*batch)
+        if self.requires_prob:
+            images, labels, probs = zip(*batch)
+        else:
+            images, labels = zip(*batch)
 
         imgH = self.imgH
         imgW = self.imgW
@@ -195,7 +234,7 @@ class alignCollate(object):
         images = [transform(image) for image in images]
         images = torch.cat([t.unsqueeze(0) for t in images], 0)
 
-        return images, labels
+        return (images, labels, probs) if self.requires_prob else (images, labels)
 
 
 if __name__ == '__main__':
