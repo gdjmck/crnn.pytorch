@@ -45,11 +45,14 @@ def license_prob(license):
 
 class CCPD(Dataset):
     def __init__(self, root, transform=None, target_transform=None, requires_prob=True, requires_interpret=True):
-        assert os.path.isdir(root)
         self.requires_prob = requires_prob
         self.requires_interpret = requires_interpret
-        self.root = root
-        self.data = glob.glob(os.path.join(self.root, '*'))
+        self.data = []
+        root = [root] if type(root) is not list else root
+        for item in root:
+            print(item)
+            assert os.path.isdir(item)
+            self.data += glob.glob(os.path.join(item, '*'))
 
         self.transform = transform
         self.target_transform = target_transform
@@ -81,9 +84,10 @@ class CCPD(Dataset):
     def __getitem__(self, index):
         assert index < len(self)
         img = Image.open(self.data[index]).convert('L')
-        if self.requires_interpret:
+        try:
             label = CCPD.interpret_plate_name(self.data[index])
-        else:
+            assert len(label)
+        except:
             label = self.data[index].rsplit('/', 1)[-1].split('.')[0]
         if self.requires_prob:
             prob = license_prob(label)

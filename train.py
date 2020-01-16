@@ -19,6 +19,7 @@ import os
 import utils
 import dataset
 import glob
+import plot
 
 import models.crnn as crnn
 
@@ -77,7 +78,10 @@ if len(glob.glob(os.path.join(opt.trainRoot, '*.mdb'))):
     train_dataset = dataset.lmdbDataset(root=opt.trainRoot)
     print('Training with lmdb dataset')
 else:
-    train_dataset = dataset.CCPD(opt.trainRoot, requires_interpret=not opt.no_need_interpret)
+    trainRoot = opt.trainRoot
+    if ',' in trainRoot:
+        trainRoot = trainRoot.split(',')
+    train_dataset = dataset.CCPD(trainRoot, requires_interpret=not opt.no_need_interpret)
     print('Training with custom dataset')
     focal_alpha = True
 assert train_dataset
@@ -126,22 +130,42 @@ crnn = crnn.CRNN(opt.imgH, nc, nclass, opt.nh)
 crnn.apply(weights_init)
 if opt.cuda:
     crnn.cuda()
-    crnn = torch.nn.DataParallel(crnn, device_ids=range(opt.ngpu))
+    #crnn = torch.nn.DataParallel(crnn, device_ids=range(opt.ngpu))
     image = image.cuda()
     probs = probs.cuda()
+    text = text.cuda()
     criterion = criterion.cuda()
 if opt.pretrained != '':
     print('loading pretrained model from %s' % opt.pretrained)
     try:
-        crnn.load_state_dict(torch.load(opt.pretrained))
+        ckpt = torch.load(opt.pretrained)
+        if 'module' in next(iter(ckpt.keys())):
+            print('DataParallel model.')
+            crnn = nn.DataParallel(crnn)
+        crnn.load_state_dict(ckpt)
     except:
+        '''
+        for par, val in ckpt.items():
+            print(par, val.size())
+        print('=======================')
+        for par, val in crnn.named_parameters():
+            print(par, val.size())
+        '''
         if not opt.strict:
-            print('Strict load failed, use unstricted loading.')
-            crnn.load_state_dict(torch.load(opt.pretrained), strict=False)
+            print('\tStrict load failed, use unstricted loading.')
+            model_params = crnn.get_params_name()
+            print(model_params)
+            for par, val in crnn.named_parameters():
+                if par in ckpt.keys() and val.size() != ckpt[par].size():
+                    print('par size mismatch:', val.size(), ckpt[par].size())
+                    del ckpt[par]
+            crnn.load_state_dict(ckpt, strict=False)
         else:
             print('Failed to load model')
             sys.exit(0)
 print(crnn)
+for name, w in crnn.named_parameters():
+    print(name, w.size())
 
 
 image = Variable(image)
@@ -155,7 +179,7 @@ loss_avg = utils.averager()
 # setup optimizer
 if opt.adam:
     optimizer = optim.Adam(crnn.parameters(), lr=opt.lr,
-                           betas=(opt.beta1, 0.999))
+                           betas=(opt.beta1, 0.999), amsgrad=True)
 elif opt.adadelta:
     optimizer = optim.Adadelta(crnn.parameters())
 else:
@@ -191,8 +215,10 @@ def val(net, dataset, criterion, max_iter=100):
         batch_size = cpu_images.size(0)
         utils.loadData(image, cpu_images)
         t, l = converter.encode(cpu_texts)
+        global text
         utils.loadData(text, t)
         utils.loadData(length, l)
+        text = text.view((batch_size, -1)).cuda()
 
         preds = crnn(image)
         preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
@@ -234,8 +260,11 @@ def trainBatch(net, criterion, optimizer):
     utils.loadData(image, cpu_images)
     t, l = converter.encode(cpu_texts)
     #print(cpu_texts, 'converts to', t, t.size())
+    global text
     utils.loadData(text, t)
     utils.loadData(length, l)
+    text = text.view((batch_size, -1))
+    text = text.cuda()
 
     preds = F.log_softmax(crnn(image), dim=-1)
     preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
@@ -248,15 +277,21 @@ def trainBatch(net, criterion, optimizer):
         writer.add_figure('Train predictions vs. actuals',
                             plot_preds(cpu_images, preds_str, cpu_texts),
                             global_step=global_step)
+        writer.add_figure('Gradient', plot.plot_grad_flow_v2(crnn.named_parameters()),
+                            global_step=global_step)
     #print('preds:', preds.size())
     preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
+    #print('preds_size:', preds_size, '\tlength:', length)
+    #print('preds.size():', preds.size(), 'text.size()', text.size())
     cost = criterion(preds, text, preds_size, length)
     if opt.focal:
         cost = cost * probs
     cost = cost.sum() / batch_size
     writer.add_scalars('training', {'loss': cost.item(), 'acc': acc}, global_step)
+    writer.add_scalars('lr', plot.get_lr(optimizer), global_step)
     crnn.zero_grad()
     cost.backward()
+    torch.nn.utils.clip_grad_value_(crnn.parameters(), 1)
     optimizer.step()
     return cost
 
@@ -278,7 +313,7 @@ for epoch in range(opt.nepoch):
             p.requires_grad = True
         crnn.train()
 
-        if i % opt.valInterval == 0:
+        if i % opt.displayInterval == 0:
             display_flag = True
         else:
             display_flag = False

@@ -78,7 +78,7 @@ class CRNN(nn.Module):
         self.predictor.add_module('relu_pred', nn.ReLU(True))
         '''
         self.rnn = nn.Sequential(
-            BidirectionalLSTM(512, nh, nh),
+            BidirectionalLSTM(nm[-1], nh, nh),
             BidirectionalLSTM(nh, nh, nclass))
 
     def forward(self, input):
@@ -104,3 +104,7 @@ class CRNN(nn.Module):
         '''
 
         return output
+
+    def get_params_name(self):
+        return list(zip(*list(
+            self.named_parameters())))[0]

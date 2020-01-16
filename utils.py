@@ -179,7 +179,8 @@ def matplotlib_imshow(img, one_channel=False):
 
 def plot_preds(images, preds, labels):
     fig = plt.figure(figsize=(12, 48))
-    for idx in range(4):
+    nb_imgs = min(len(images), 4)
+    for idx in range(nb_imgs):
         ax = fig.add_subplot(4, 1, idx+1, xticks=[], yticks=[])
         matplotlib_imshow(images[idx], one_channel=True)
         ax.set_title('%s predicted as %s'%(labels[idx], preds[idx]), 
