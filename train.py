@@ -70,6 +70,7 @@ focal_alpha = False
 val_wrong = None
 
 writer = SummaryWriter(opt.summary)
+global_step = 0
 
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
@@ -144,13 +145,6 @@ if opt.pretrained != '':
             crnn = nn.DataParallel(crnn)
         crnn.load_state_dict(ckpt)
     except:
-        '''
-        for par, val in ckpt.items():
-            print(par, val.size())
-        print('=======================')
-        for par, val in crnn.named_parameters():
-            print(par, val.size())
-        '''
         if not opt.strict:
             print('\tStrict load failed, use unstricted loading.')
             model_params = crnn.get_params_name()
@@ -164,8 +158,10 @@ if opt.pretrained != '':
             print('Failed to load model')
             sys.exit(0)
 print(crnn)
+'''
 for name, w in crnn.named_parameters():
     print(name, w.size())
+'''
 
 
 image = Variable(image)
@@ -297,13 +293,12 @@ def trainBatch(net, criterion, optimizer):
 
 if opt.test:
     val_wrong = []
-    val(crnn, test_dataset, criterion)
+    val(crnn, test_dataset, criterion, max_iter=len(test_dataset))
     with open('./val_wrong.txt', 'w') as f:
         for item in val_wrong:
             f.write(item+'\n')
     sys.exit(0)
 
-global_step = 0
 for epoch in range(opt.nepoch):
     train_iter = iter(train_loader)
     i = 0
